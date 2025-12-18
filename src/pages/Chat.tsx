@@ -52,6 +52,12 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const activeConversationRef = useRef<Conversation | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -62,7 +68,31 @@ export default function Chat() {
   useEffect(() => {
     if (profile) {
       fetchConversations();
-      subscribeToMessages();
+      
+      // Set up realtime subscription
+      const channel = supabase
+        .channel('messages-realtime')
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'messages' },
+          (payload) => {
+            const newMessage = payload.new as Message;
+            // Use ref to get current active conversation
+            if (activeConversationRef.current && newMessage.conversation_id === activeConversationRef.current.id) {
+              setMessages(prev => {
+                // Prevent duplicates
+                if (prev.some(m => m.id === newMessage.id)) return prev;
+                return [...prev, newMessage];
+              });
+            }
+            fetchConversations();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }
   }, [profile]);
 
@@ -128,27 +158,6 @@ export default function Chat() {
     if (data) {
       setMessages(data as Message[]);
     }
-  };
-
-  const subscribeToMessages = () => {
-    const channel = supabase
-      .channel('messages-channel')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
-          const newMessage = payload.new as Message;
-          if (activeConversation && newMessage.conversation_id === activeConversation.id) {
-            setMessages(prev => [...prev, newMessage]);
-          }
-          fetchConversations();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   };
 
   const handleSelectUser = async (selectedProfile: Profile) => {
